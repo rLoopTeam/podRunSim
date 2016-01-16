@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 m_pod = 385.0 #kg
 c_d = 0.35 # m^2
 frontal_area = 1.14 # m^2
+n_mag = 24.0
 
 eddyBrake = EddyBrake('./eddyBrakeData.csv')
 
@@ -29,8 +30,8 @@ def railTemp(q):
   c = 902.0
   rho = 2700.0
   Ti = 40.0 
-  l = 0.10795*6.0
-  return l*q/(v*q*c*rho) + Ti
+  l = 0.10795*n_mag/4.0
+  return l*q/(v*c*rho) + Ti
 
 def dragForce(v):
   #return -0.5*frontal_area*c_d*v**2  
@@ -40,13 +41,14 @@ y0 = [x_0, v_0]
 
 def func(y, t):
   a = ( 
-       -12.0*eddyBrake.f_drag(y[1],0.001)
+       -n_mag/2.0*eddyBrake.f_drag(y[1],0.001)
        +dragForce(y[1])
        +pusherForce(t)
       )/m_pod
   return [y[1],a]
 
-x = arange(0, 120, 0.01)
+dt = 0.01
+x = arange(0, 120, dt)
 t = x
 y = odeint(func, y0, t)
 
@@ -54,6 +56,8 @@ y = odeint(func, y0, t)
 T_final = np.zeros(len(t))
 H_y_max = np.zeros(len(t))
 H_y_mean = np.zeros(len(t))
+accel_g = np.zeros(len(t))
+lift_per_assy = np.zeros(len(t))
 
 for i in range(len(t)):
   #h = h[i]
@@ -63,6 +67,10 @@ for i in range(len(t)):
   T_final[i] = railTemp(eddyBrake.q_max(v,h))
   H_y_max[i] = eddyBrake.H_y_max(v,h)
   H_y_mean[i] = eddyBrake.H_y_mean(v,h)
+  lift_per_assy[i] = n_mag/4.0*eddyBrake.f_lift(v,h)
+
+ag = np.diff(y[:,1])/(dt*9.81)
+accel_g[1:len(accel_g)]=ag
 
 df_out = pd.DataFrame({
     'time [s]':t,
@@ -70,7 +78,8 @@ df_out = pd.DataFrame({
     'velocity [m\s]':y[:,1],
     'T_rail_final [C]':T_final,
     'H_y_max':H_y_max,
-    'H_y_mean':H_y_mean
+    'H_y_mean':H_y_mean,
+    'accel [g]':accel_g
     })
 
 df_out.to_csv('out.csv')
@@ -79,19 +88,25 @@ df_out.to_csv('out.csv')
 
 plt.figure()
 
-plt.subplot(411)
+plt.subplot(611)
 plt.plot(t,y[:,0])
 plt.xlabel('time [s]')
 plt.ylabel('position [m]')
 plt.grid()
 
-plt.subplot(412)
+plt.subplot(612)
 plt.plot(t,y[:,1])
 plt.xlabel('time [s]')
 plt.ylabel('velocity [m/s]')
 plt.grid()
 
-plt.subplot(413)
+plt.subplot(613)
+plt.plot(t,accel_g)
+plt.xlabel('time [s]')
+plt.ylabel('accel [g]')
+plt.grid()
+
+plt.subplot(614)
 plt.plot(t,H_y_max,label='max')
 plt.plot(t,H_y_mean,label='mean')
 plt.xlabel('time [s]')
@@ -99,10 +114,16 @@ plt.ylabel('H_y [A/m]')
 plt.legend(loc='lower left')
 plt.grid()
 
-plt.subplot(414)
+plt.subplot(615)
 plt.plot(t,T_final)
 plt.xlabel('time [s]')
-plt.ylabel('I-beam\nbounding temp [C]')
+plt.ylabel('T_ibeam_surf [C]')
+plt.grid()
+
+plt.subplot(616)
+plt.plot(t,lift_per_assy)
+plt.xlabel('time [s]')
+plt.ylabel('F_lift_per_side [N]')
 plt.grid()
 
 plt.show()
