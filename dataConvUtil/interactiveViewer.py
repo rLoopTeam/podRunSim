@@ -2,12 +2,19 @@ import numpy as np
 import matplotlib.pyplot as plt
 from viewData import *
 import pdb
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('input',nargs='+')
+args = parser.parse_args()
 
 #df = readInAndGlobTogether(['DataTable1.csv','ForceTable.csv','force.csv','demag.csv'])
 #df = readInAndGlobTogether(['force.csv','demag.csv'])
 #df = readInAndGlobTogether(['force7.csv','dmag7.csv'])
-df = readInAndGlobTogether(['force8.csv','demag8.csv'])
+#df = readInAndGlobTogether(['force8.csv','demag8.csv'])
+df = readInAndGlobTogether(args.input)
 dfv = identifyVariations(df)
+#dfv['h'] = dfv['gap']*0.001
 dff = flatten(df)
 
 fig = plt.figure()
@@ -47,14 +54,14 @@ def onpick(event):
     v = v[0]
     h = h[0]
 
-    dff_slice = dff[(dff['v'] == v)&(dff['h'] == h)]
+    dff_slice = dff[(dff['v'] == v)&(dff['h'] == h/1000.)]
 
     figi = plt.figure()
     plt.subplot(311)
 
     plt.title('v = {} m/s, h = {} mm'.format(v,h))
-    plt.plot(dff_slice['Time [s]'],dff_slice['F_drag'],'o',label='x')
-    plt.plot(dff_slice['Time [s]'],dff_slice['F_lift'],'o',label='y')
+    plt.plot(dff_slice['Time [s]'],dff_slice['F_drag'],'o',label='drag')
+    plt.plot(dff_slice['Time [s]'],dff_slice['F_lift'],'o',label='lift')
     plt.xlabel('Time [s]')
     plt.ylabel('Force [N]')
     plt.legend()
