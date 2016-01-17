@@ -51,6 +51,31 @@ def dragForce(v):
   #return -0.5*frontal_area*c_d*v**2  
   return 0.0
 
+class piController():
+
+  def __init__(self,):
+    self.i = 0
+    self.a_set = -0.5*9.81
+    self.k_i = 0.01
+    self.k_p = 0.001
+    self.t = 0
+  
+  def evaluate(self,t,a):
+    self.t_old = self.t
+    self.t = t
+    error = a - self.a_set
+    self.i += error*(self.t-self.t_old)
+    if abs(self.i)>1000:
+      self.i = self.i/abs(self.i)*1000
+    h = 0.1-(self.k_i * self.i + self.k_p * error)
+
+    if h > 0.020:
+      h = 0.020
+    if h < 0.001:
+      h = 0.001
+
+    return h
+
 class PodModel():
 
   def __init__(self,m_pod):
@@ -115,7 +140,7 @@ H_y_max = np.ones(len(t))*np.nan
 H_y_mean = np.ones(len(t))*np.nan
 accel_g = np.ones(len(t))*np.nan
 lift_per_assy = np.ones(len(t))*np.nan
-h = np.ones(len(t))*np.nan
+gap = np.ones(len(t))*np.nan
 
 
 # create state vector for t0
@@ -126,6 +151,8 @@ eddyBrake = EddyBrake(eddyBrakeDataFile)
 model = PodModel(m_pod)
 model.setEddyBrakeModel(eddyBrake)
 model.setICs(y0,t0)
+
+controller = piController()
 
 # store state vars for t0
 x[0] = x_0
@@ -138,6 +165,7 @@ H_y_max[0] = eddyBrake.H_y_max(model.v,model.h)
 H_y_mean[0] = eddyBrake.H_y_mean(model.v,model.h)
 lift_per_assy[0] = n_mag_lift/n_mag_fea*eddyBrake.f_lift(model.v,model.h)
 accel_g[0] = 0
+gap[0] = model.h
 
 r = ode(model.y_dot).set_integrator("dopri5")
 r.set_solout(model.on_integrator_timestep)
@@ -148,7 +176,8 @@ while r.successful() and r.t<t_max:
   r.integrate(r.t+dt_outer)
   print('time: {}, velocity: {}'.format(r.t,model.v))
   i+=1
-  h = 0.020 * 0.5 * np.sin(np.pi*r.t/5.) + 0.012 
+  #h = 0.020 * 0.5 * np.sin(np.pi*r.t/5.) + 0.012 
+  h = controller.evaluate(r.t,model.a)
   model.on_control_loop_timestep(h)
 
   x[i] = r.y[0]
@@ -164,6 +193,7 @@ while r.successful() and r.t<t_max:
   H_y_mean[i] = eddyBrake.H_y_mean(v[i],model.h)
   lift_per_assy[i] = n_mag_lift/n_mag_fea*eddyBrake.f_lift(v[i],model.h)
   accel_g[i] = model.a/9.81
+  gap[i] = model.h
 
 # output
 
@@ -174,7 +204,8 @@ df_out = pd.DataFrame({
     'T_rail_final [C]':T_final,
     'H_y_max':H_y_max,
     'H_y_mean':H_y_mean,
-    'accel [g]':accel_g
+    'accel [g]':accel_g,
+    'gap [m]':h
     })
 
 df_out.to_csv(outfile)
@@ -182,25 +213,25 @@ df_out.to_csv(outfile)
 
 plt.figure()
 
-plt.subplot(611)
+plt.subplot(711)
 plt.plot(t,x)
 plt.xlabel('time [s]')
 plt.ylabel('position [m]')
 plt.grid()
 
-plt.subplot(612)
+plt.subplot(712)
 plt.plot(t,v)
 plt.xlabel('time [s]')
 plt.ylabel('velocity [m/s]')
 plt.grid()
 
-plt.subplot(613)
+plt.subplot(713)
 plt.plot(t,accel_g)
 plt.xlabel('time [s]')
 plt.ylabel('accel [g]')
 plt.grid()
 
-plt.subplot(614)
+plt.subplot(714)
 plt.plot(t,H_y_max,label='max')
 plt.plot(t,H_y_mean,label='mean')
 plt.xlabel('time [s]')
@@ -208,16 +239,22 @@ plt.ylabel('H_y [A/m]')
 plt.legend(loc='lower left')
 plt.grid()
 
-plt.subplot(615)
+plt.subplot(715)
 plt.plot(t,T_final)
 plt.xlabel('time [s]')
 plt.ylabel('T_ibeam_surf [C]')
 plt.grid()
 
-plt.subplot(616)
+plt.subplot(716)
 plt.plot(t,lift_per_assy)
 plt.xlabel('time [s]')
 plt.ylabel('F_lift_per_side [N]')
+plt.grid()
+
+plt.subplot(717)
+plt.plot(t,gap)
+plt.xlabel('time [s]')
+plt.ylabel('gap [m]')
 plt.grid()
 
 plt.show()
