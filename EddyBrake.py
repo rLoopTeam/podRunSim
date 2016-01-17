@@ -25,4 +25,4 @@ class EddyBrake():
 
     df_f_q_mean = df[df['q_rail_surf_mean'].isnull()==False]
     self.q_mean = LinearNDInterpolator((df_f_q_mean['v'],df_f_q_mean['h']),df_f_q_mean['q_rail_surf_mean'])
-
+    self.df = df
