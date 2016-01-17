@@ -1,4 +1,4 @@
-from scipy.integrate import odeint
+from scipy.integrate import ode
 from scipy.special import gamma, airy
 from numpy import arange
 from EddyBrake import EddyBrake
@@ -7,15 +7,29 @@ import pandas as pd
 
 import matplotlib.pyplot as plt
 
-m_pod = 385.0 #kg
-c_d = 0.35 # m^2
+# inputs
+##########
+m_pod = 385.0 #kg 
+c_d = 0.35 # m^2 
 frontal_area = 1.14 # m^2
-n_mag = 24.0
 
-eddyBrake = EddyBrake('./eddyBrakeData.csv')
+eddyBrakeDataFile = './eddyBrakeData.csv'
+n_mag_fea = 2.0
+n_mag_drag = 24.0
+n_mag_lift = 12.0
+n_mag_thermal = 12.0
+
+t_max = 120.0 #seconds
+t0 = 0.0 
+
+T_rail_init = 40.0
 
 x_0 = 0.0 # pod initial position
 v_0 = 99.0 # pod initial velocity
+
+dt_outer = 0.01
+outfile = 'out.csv'
+##########
 
 def pusherForce(t):
   f = 10000.0
@@ -23,79 +37,159 @@ def pusherForce(t):
     f = 0.0
   return f
 
-def railTemp(q):
+def railTemp(q,v,Ti):
   # Thermodynamics, An Engineering Approach
   # rho_al = 2700. kg/m^3
   # c_al = 0.902 kJ/(kg*K) @ 300K
   c = 902.0
   rho = 2700.0
   Ti = 40.0 
-  l = 0.10795*n_mag/4.0
+  l = 0.10795*n_mag_thermal/n_mag_fea
   return l*q/(v*c*rho) + Ti
 
 def dragForce(v):
   #return -0.5*frontal_area*c_d*v**2  
   return 0.0
 
+class PodModel():
+
+  def __init__(self,m_pod):
+    self.t = 0
+    self.t_old = 0
+    self.v = 0
+    self.v_old = 0
+    self.x = 0
+    self.x_older = 0
+    self.h = 0.001
+    self.m_pod = m_pod
+    self.a = 0
+
+  def setICs(self,y,t):
+    self.t = t
+    self.t_old = t
+    self.v = y[1]
+    self.v_old = y[1] 
+    self.x = y[0]
+    self.x_older = y[0]
+
+  def setEddyBrakeModel(self,model):
+    self.eddyBrake = model
+
+  def on_control_loop_timestep(self,h):
+    self.h = h
+    return None
+
+  def on_integrator_timestep(self,t,y):
+    self.t_old = self.t
+    self.t = t
+    self.v_old = self.v
+    self.v = y[1]
+    self.x_old = self.x
+    self.x = y[0]
+    self.a = (self.v - self.v_old)/(self.t-self.t_old)
+    # update any coeffecients if needed
+    # for example the current rail temp could be calculated
+    # here, but now it's purely an output so it's not needed,
+    # but if a radiation model were implemented, we'd need to
+    # calculate it here. For example:
+    #self.T_final = railTemp(eddyBrake.q_max(v,h))
+    return None
+
+  def y_dot(self,t,y):
+    x = y[0]
+    v = y[1]
+    a = -n_mag_drag/n_mag_fea*self.eddyBrake.f_drag(v,self.h)/self.m_pod
+    return [v,a]
+  
+
+t = arange(0, t_max, dt_outer)
+
+# allocate state variables
+x = np.ones(len(t))*np.nan
+v = np.ones(len(t))*np.nan
+a = np.ones(len(t))*np.nan
+
+# allocate aux fields
+T_final = np.ones(len(t))*np.nan
+H_y_max = np.ones(len(t))*np.nan
+H_y_mean = np.ones(len(t))*np.nan
+accel_g = np.ones(len(t))*np.nan
+lift_per_assy = np.ones(len(t))*np.nan
+h = np.ones(len(t))*np.nan
+
+
+# create state vector for t0
 y0 = [x_0, v_0]
 
-def func(y, t):
-  a = ( 
-       -n_mag/2.0*eddyBrake.f_drag(y[1],0.001)
-       +dragForce(y[1])
-       +pusherForce(t)
-      )/m_pod
-  return [y[1],a]
+# initialize model
+eddyBrake = EddyBrake(eddyBrakeDataFile)
+model = PodModel(m_pod)
+model.setEddyBrakeModel(eddyBrake)
+model.setICs(y0,t0)
 
-dt = 0.01
-x = arange(0, 120, dt)
-t = x
-y = odeint(func, y0, t)
+# store state vars for t0
+x[0] = x_0
+v[0] = v_0
+a[0] = 0.0
 
-# calc aux fields
-T_final = np.zeros(len(t))
-H_y_max = np.zeros(len(t))
-H_y_mean = np.zeros(len(t))
-accel_g = np.zeros(len(t))
-lift_per_assy = np.zeros(len(t))
+# evaluate aux variables for t0
+T_final[0] = railTemp(eddyBrake.q_max(model.v,model.h).max(),model.v,T_rail_init)
+H_y_max[0] = eddyBrake.H_y_max(model.v,model.h)
+H_y_mean[0] = eddyBrake.H_y_mean(model.v,model.h)
+lift_per_assy[0] = n_mag_lift/n_mag_fea*eddyBrake.f_lift(model.v,model.h)
+accel_g[0] = 0
 
-for i in range(len(t)):
-  #h = h[i]
-  h = 0.001
-  v = y[i,1]
-  print('Warning: hard coded h value!!!')
-  T_final[i] = railTemp(eddyBrake.q_max(v,h))
-  H_y_max[i] = eddyBrake.H_y_max(v,h)
-  H_y_mean[i] = eddyBrake.H_y_mean(v,h)
-  lift_per_assy[i] = n_mag/4.0*eddyBrake.f_lift(v,h)
+r = ode(model.y_dot).set_integrator("dopri5")
+r.set_solout(model.on_integrator_timestep)
+r.set_initial_value(y0, t0)
 
-ag = np.diff(y[:,1])/(dt*9.81)
-accel_g[1:len(accel_g)]=ag
+i=0
+while r.successful() and r.t<t_max:
+  r.integrate(r.t+dt_outer)
+  print('time: {}, velocity: {}'.format(r.t,model.v))
+  i+=1
+  h = 0.020 * 0.5 * np.sin(np.pi*r.t/5.) + 0.012 
+  model.on_control_loop_timestep(h)
+
+  x[i] = r.y[0]
+  v[i] = r.y[1]
+  a[i] = model.a
+
+  # Evaluate aux variables here that are only for output.
+  # Calc them in model.on_timestep if the state model
+  # depends them, but assign them to the output arrays here.
+  T_final[i] = railTemp(eddyBrake.q_max(v[i],model.h),model.v,T_rail_init)
+  #T_final[i] = model.T_final # if state model needs T_final
+  H_y_max[i] = eddyBrake.H_y_max(v[i],model.h)
+  H_y_mean[i] = eddyBrake.H_y_mean(v[i],model.h)
+  lift_per_assy[i] = n_mag_lift/n_mag_fea*eddyBrake.f_lift(v[i],model.h)
+  accel_g[i] = model.a/9.81
+
+# output
 
 df_out = pd.DataFrame({
     'time [s]':t,
-    'position [m]':y[:,0],
-    'velocity [m\s]':y[:,1],
+    'position [m]':x,
+    'velocity [m\s]':v,
     'T_rail_final [C]':T_final,
     'H_y_max':H_y_max,
     'H_y_mean':H_y_mean,
     'accel [g]':accel_g
     })
 
-df_out.to_csv('out.csv')
+df_out.to_csv(outfile)
 
-# output
 
 plt.figure()
 
 plt.subplot(611)
-plt.plot(t,y[:,0])
+plt.plot(t,x)
 plt.xlabel('time [s]')
 plt.ylabel('position [m]')
 plt.grid()
 
 plt.subplot(612)
-plt.plot(t,y[:,1])
+plt.plot(t,v)
 plt.xlabel('time [s]')
 plt.ylabel('velocity [m/s]')
 plt.grid()
