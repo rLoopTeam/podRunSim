@@ -4,31 +4,41 @@ from numpy import arange
 from EddyBrake import EddyBrake
 import numpy as np
 import pandas as pd
-
+import argparse
 import matplotlib.pyplot as plt
+import json
+
+parser = argparse.ArgumentParser()
+parser.add_argument('infile',help='input file')
+args = parser.parse_args()
+
+f = open(args.infile)
+raw = f.read()
+f.close
+
+inputs = json.loads(raw)
 
 # inputs
 ##########
-m_pod = 385.0 #kg 
-c_d = 0.35 # m^2 
-frontal_area = 1.14 # m^2
+m_pod = inputs['m_pod'] #kg 
+eddyBrakeDataFile = inputs['eddyBrakeDataFile']
+n_mag_fea = inputs['n_mag_fea']
+n_mag_drag = inputs['n_mag_drag']
+n_mag_lift = inputs['n_mag_lift']
+n_mag_thermal = inputs['n_mag_thermal']
 
-eddyBrakeDataFile = './eddyBrakeData.csv'
-n_mag_fea = 2.0
-n_mag_drag = 24.0
-n_mag_lift = 12.0
-n_mag_thermal = 12.0
+t_max = inputs['t_max'] #seconds
+t0 = inputs['t0']
 
-t_max = 120.0 #seconds
-t0 = 0.0 
+T_rail_init = inputs['T_rail_init']
 
-T_rail_init = 40.0
+x_0 = inputs['x_0'] # pod initial position
+v_0 = inputs['v_0'] # pod initial velocity
 
-x_0 = 0.0 # pod initial position
-v_0 = 99.0 # pod initial velocity
+dt_outer = inputs['dt_outer']
+outfile = inputs['outfile']
 
-dt_outer = 0.01
-outfile = 'out.csv'
+brakeControllerDict = inputs['brakeController']
 ##########
 
 def pusherForce(t):
@@ -53,11 +63,13 @@ def dragForce(v):
 
 class piController():
 
-  def __init__(self,):
+  def __init__(self,params):
     self.i = 0
-    self.a_set = -0.5*9.81
-    self.k_i = 0.01
-    self.k_p = 0.001
+    self.a_set = -params['decel_target']*9.81
+    self.k_i = params['k_i']
+    self.k_p = params['k_p']
+    self.gap_max = params['gap_max']
+    self.gap_min = params['gap_min']
     self.t = 0
   
   def evaluate(self,t,a):
@@ -69,12 +81,29 @@ class piController():
       self.i = self.i/abs(self.i)*1000
     h = 0.1-(self.k_i * self.i + self.k_p * error)
 
-    if h > 0.020:
-      h = 0.020
-    if h < 0.001:
-      h = 0.001
+    if h > self.gap_max:
+      h = self.gap_max
+    if h < self.gap_min:
+      h = self.gap_min
 
     return h
+
+class constantGapBrakeController():
+
+  def __init__(self,params):
+    self.gap = params['gap']
+
+  def evaluate(self,t,a):
+    return self.gap
+
+class lookupTableController():
+
+  def __init__(self):
+    pass
+
+  def evaluate(self):
+    pass
+
 
 class PodModel():
 
@@ -152,7 +181,13 @@ model = PodModel(m_pod)
 model.setEddyBrakeModel(eddyBrake)
 model.setICs(y0,t0)
 
-controller = piController()
+# instanciate brake controller
+if brakeControllerDict['type'] == 'piController':
+  controller = piController(brakeControllerDict['params'])
+elif brakeControllerDict['type'] == 'constant_gap':
+  controller = constantGapBrakeController(brakeControllerDict['params'])
+else:
+  raise Warning('no brake controller specified')
 
 # store state vars for t0
 x[0] = x_0
@@ -176,7 +211,6 @@ while r.successful() and r.t<t_max:
   r.integrate(r.t+dt_outer)
   print('time: {}, velocity: {}'.format(r.t,model.v))
   i+=1
-  #h = 0.020 * 0.5 * np.sin(np.pi*r.t/5.) + 0.012 
   h = controller.evaluate(r.t,model.a)
   model.on_control_loop_timestep(h)
 
