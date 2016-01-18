@@ -7,6 +7,7 @@ import pandas as pd
 import argparse
 import matplotlib.pyplot as plt
 import json
+from scipy.optimize import minimize_scalar
 
 parser = argparse.ArgumentParser()
 parser.add_argument('infile',help='input file')
@@ -72,14 +73,14 @@ class piController():
     self.gap_min = params['gap_min']
     self.t = 0
   
-  def evaluate(self,t,a):
+  def evaluate(self,t,a,v):
     self.t_old = self.t
     self.t = t
     error = a - self.a_set
     self.i += error*(self.t-self.t_old)
     if abs(self.i)>1000:
       self.i = self.i/abs(self.i)*1000
-    h = 0.1-(self.k_i * self.i + self.k_p * error)
+    h = self.gap_max - (self.gap_max-self.gap_min)*(self.k_i * self.i + self.k_p * error)
 
     if h > self.gap_max:
       h = self.gap_max
@@ -93,17 +94,29 @@ class constantGapBrakeController():
   def __init__(self,params):
     self.gap = params['gap']
 
-  def evaluate(self,t,a):
+  def evaluate(self,t,a,v):
     return self.gap
 
-class lookupTableController():
+class constDecelLookupTableController():
 
-  def __init__(self):
-    pass
+  def __init__(self,params,m_pod,eddyBrake,n_mag_fea,n_mag_drag):
+    self.eb = eddyBrake
+    self.n_mag_fea = n_mag_fea
+    self.n_mag_drag = n_mag_drag
+    self.a_set = params['decel_target']*9.81
+    self.gap_max = params['gap_max']
+    self.gap_min = params['gap_min']
+    self.m_pod = m_pod
+    #self.v = 10.0
 
-  def evaluate(self):
-    pass
+  def evaluate(self,t,a,v):
+    #self.v = v
+    h = minimize_scalar(self.func,method='Bounded',
+             bounds=[self.gap_min,self.gap_max],args=(v,)).x
+    return h
 
+  def func(self,h,v):
+    return (self.n_mag_drag/self.n_mag_fea*self.eb.f_drag(v,h).max()/self.m_pod-self.a_set)**2.0
 
 class PodModel():
 
@@ -157,19 +170,21 @@ class PodModel():
   
 
 t = arange(0, t_max, dt_outer)
+n_outerSteps = t_max/dt_outer
 
 # allocate state variables
-x = np.ones(len(t))*np.nan
-v = np.ones(len(t))*np.nan
-a = np.ones(len(t))*np.nan
+t = np.ones(n_outerSteps+1)*np.nan
+x = np.ones(n_outerSteps+1)*np.nan
+v = np.ones(n_outerSteps+1)*np.nan
+a = np.ones(n_outerSteps+1)*np.nan
 
 # allocate aux fields
-T_final = np.ones(len(t))*np.nan
-H_y_max = np.ones(len(t))*np.nan
-H_y_mean = np.ones(len(t))*np.nan
-accel_g = np.ones(len(t))*np.nan
-lift_per_assy = np.ones(len(t))*np.nan
-gap = np.ones(len(t))*np.nan
+T_final = np.ones(n_outerSteps+1)*np.nan
+H_y_max = np.ones(n_outerSteps+1)*np.nan
+H_y_mean = np.ones(n_outerSteps+1)*np.nan
+accel_g = np.ones(n_outerSteps+1)*np.nan
+lift_per_assy = np.ones(n_outerSteps+1)*np.nan
+gap = np.ones(n_outerSteps+1)*np.nan
 
 
 # create state vector for t0
@@ -186,6 +201,8 @@ if brakeControllerDict['type'] == 'piController':
   controller = piController(brakeControllerDict['params'])
 elif brakeControllerDict['type'] == 'constant_gap':
   controller = constantGapBrakeController(brakeControllerDict['params'])
+elif brakeControllerDict['type'] == 'constDecelLookupTable': 
+  controller = constDecelLookupTableController(brakeControllerDict['params'],m_pod,eddyBrake,n_mag_fea,n_mag_drag)
 else:
   raise Warning('no brake controller specified')
 
@@ -207,13 +224,14 @@ r.set_solout(model.on_integrator_timestep)
 r.set_initial_value(y0, t0)
 
 i=0
-while r.successful() and r.t<t_max:
+while r.successful() and i<n_outerSteps:
   r.integrate(r.t+dt_outer)
   print('time: {}, velocity: {}'.format(r.t,model.v))
   i+=1
-  h = controller.evaluate(r.t,model.a)
+  h = controller.evaluate(r.t,model.a,model.v)
   model.on_control_loop_timestep(h)
 
+  t[i] = r.t
   x[i] = r.y[0]
   v[i] = r.y[1]
   a[i] = model.a
@@ -221,7 +239,7 @@ while r.successful() and r.t<t_max:
   # Evaluate aux variables here that are only for output.
   # Calc them in model.on_timestep if the state model
   # depends them, but assign them to the output arrays here.
-  T_final[i] = railTemp(eddyBrake.q_max(v[i],model.h),model.v,T_rail_init)
+  T_final[i] = railTemp(eddyBrake.q_max(v[i],model.h).max(),model.v,T_rail_init)
   #T_final[i] = model.T_final # if state model needs T_final
   H_y_max[i] = eddyBrake.H_y_max(v[i],model.h)
   H_y_mean[i] = eddyBrake.H_y_mean(v[i],model.h)
