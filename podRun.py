@@ -8,10 +8,11 @@ import argparse
 import matplotlib.pyplot as plt
 import json
 from scipy.optimize import minimize_scalar
+from scipy.interpolate import interp1d
 
 parser = argparse.ArgumentParser()
 parser.add_argument('infile',help='input file')
-args = parser.parse_args()
+args = parser.parse_args() 
 
 f = open(args.infile)
 raw = f.read()
@@ -54,7 +55,6 @@ def railTemp(q,v,Ti):
   # c_al = 0.902 kJ/(kg*K) @ 300K
   c = 902.0
   rho = 2700.0
-  Ti = 40.0 
   l = 0.10795*n_mag_thermal/n_mag_fea
   return l*q/(v*c*rho) + Ti
 
@@ -73,7 +73,7 @@ class piController():
     self.gap_min = params['gap_min']
     self.t = 0
   
-  def evaluate(self,t,a,v):
+  def evaluate(self,t,a,v,x):
     self.t_old = self.t
     self.t = t
     error = a - self.a_set
@@ -87,15 +87,15 @@ class piController():
     if h < self.gap_min:
       h = self.gap_min
 
-    return h
+    return h,0
 
 class constantGapBrakeController():
 
   def __init__(self,params):
     self.gap = params['gap']
 
-  def evaluate(self,t,a,v):
-    return self.gap
+  def evaluate(self,t,a,v,x):
+    return self.gap,0
 
 class constDecelLookupTableController():
 
@@ -109,14 +109,102 @@ class constDecelLookupTableController():
     self.m_pod = m_pod
     #self.v = 10.0
 
-  def evaluate(self,t,a,v):
+  def evaluate(self,t,a,v,x):
     #self.v = v
     h = minimize_scalar(self.func,method='Bounded',
              bounds=[self.gap_min,self.gap_max],args=(v,)).x
-    return h
+    return h,0
 
   def func(self,h,v):
     return (self.n_mag_drag/self.n_mag_fea*self.eb.f_drag(v,h).max()/self.m_pod-self.a_set)**2.0
+
+class trajectoryPlanController():
+
+  def __init__(self,params,m_pod,eddyBrake,n_mag_fea,n_mag_drag):
+    self.eb = eddyBrake
+    self.n_mag_fea = n_mag_fea
+    self.n_mag_drag = n_mag_drag
+    self.m_pod = m_pod
+    
+    self.state = 'accel'
+
+    self.gap_max = params['gap_max']
+    self.gap_min = params['gap_min']
+
+    self.xMaxAccel = params['xMaxAccel']
+    self.xMax = params['xMax']
+    self.vMax = params['vMax']
+    self.accel = params['accel']*9.81
+    self.brakingMode = params['brakingMode']
+
+    self.lutc =  constDecelLookupTableController(params,m_pod,eddyBrake,n_mag_fea,n_mag_drag)
+
+    df = pd.read_csv(params['brakingCurve'])
+    df = df[df['velocity [m/s]'].isnull() == False]
+    df = df.sort(['velocity [m/s]'])
+    self.brakeCurveDispAtSpeed = interp1d(df['velocity [m/s]'],df['position [m]'])
+    self.brakeCurveMaxDisp = df['position [m]'].max()
+    self.brakeCurveAccelAtSpeed = interp1d(df['velocity [m/s]'],df['accel [g]'])
+    self.brakeCurveGapAtPosition = interp1d(df['position [m]'],df['gap [m]'])
+
+  def evaluate(self,t,a,v,x):
+
+    if self.state == 'accel':
+      if (v >= self.vMax) or (x >= self.xMaxAccel):
+        self.state = 'coast'
+        print('accel->coast')
+      if self.itsTimeToStartBraking(v,x):
+        self.state = 'brake'
+        self.brakingCurveOffset = x
+        print('accel->brake')
+      thrust = self.m_pod*self.accel
+      h = self.gap_max
+
+    if self.state == 'coast':
+      if self.itsTimeToStartBraking(v,x):
+        self.state = 'brake'
+        self.brakingCurveOffset = x
+        print('coast->brake')
+      thrust = 0
+      h = self.gap_max
+
+    if self.state == 'brake':
+      if self.brakingMode == 'minGap':
+        h = self.gap_min
+        thrust = 0
+      elif self.brakingMode == 'gapVsPosition':
+        h = self.brakeCurveGapAtPosition(x-self.brakingCurveOffset)
+        # needs work, not correct               ^
+        thrust = 0
+      else:
+        raise Warning("brakingMode was not specified in brakeController params")
+
+    return h,thrust
+
+  def itsTimeToStartBraking(self,v,currentPosition):
+    stoppingDistanceNeeded = self.brakeCurveMaxDisp - self.brakeCurveDispAtSpeed(v)
+    if (currentPosition + stoppingDistanceNeeded) > self.xMax:
+      return True
+    else:
+      return False
+
+class percentOfMaxBrakingForceController():
+
+  def __init__(self,params,m_pod,eddyBrake,n_mag_fea,n_mag_drag):
+    self.gap_min = params['gap_min']
+    self.gap_max = params['gap_max']
+    self.eddyBrake = eddyBrake
+    self.percentage = params['percentage']
+
+  def evaluate(self,t,a,v,x):
+    f_max = self.eddyBrake.f_drag(v,self.gap_min)
+    f_requested = f_max * self.percentage/100.
+    h = minimize_scalar(self.func,method='Bounded',
+             bounds=[self.gap_min,self.gap_max],args=(v,f_requested)).x
+    return h,0
+
+  def func(self,h,v,f):
+    return (self.eddyBrake.f_drag(v,h)-f)**2
 
 class PodModel():
 
@@ -130,6 +218,7 @@ class PodModel():
     self.h = 0.001
     self.m_pod = m_pod
     self.a = 0
+    self.thrust = 0
 
   def setICs(self,y,t):
     self.t = t
@@ -142,8 +231,9 @@ class PodModel():
   def setEddyBrakeModel(self,model):
     self.eddyBrake = model
 
-  def on_control_loop_timestep(self,h):
+  def on_control_loop_timestep(self,h,thrust):
     self.h = h
+    self.thrust = thrust
     return None
 
   def on_integrator_timestep(self,t,y):
@@ -165,7 +255,9 @@ class PodModel():
   def y_dot(self,t,y):
     x = y[0]
     v = y[1]
-    a = -n_mag_drag/n_mag_fea*self.eddyBrake.f_drag(v,self.h)/self.m_pod
+    a = (self.thrust
+         -n_mag_drag/n_mag_fea*self.eddyBrake.f_drag(v,self.h)
+        )/self.m_pod
     return [v,a]
   
 
@@ -203,6 +295,10 @@ elif brakeControllerDict['type'] == 'constant_gap':
   controller = constantGapBrakeController(brakeControllerDict['params'])
 elif brakeControllerDict['type'] == 'constDecelLookupTable': 
   controller = constDecelLookupTableController(brakeControllerDict['params'],m_pod,eddyBrake,n_mag_fea,n_mag_drag)
+elif brakeControllerDict['type'] == 'trajectoryPlanController':
+  controller = trajectoryPlanController(brakeControllerDict['params'],m_pod,eddyBrake,n_mag_fea,n_mag_drag)
+elif brakeControllerDict['type'] == 'percentOfMaxBrakingForceController':
+  controller = percentOfMaxBrakingForceController(brakeControllerDict['params'],m_pod,eddyBrake,n_mag_fea,n_mag_drag)
 else:
   raise Warning('no brake controller specified')
 
@@ -223,13 +319,16 @@ r = ode(model.y_dot).set_integrator("dopri5")
 r.set_solout(model.on_integrator_timestep)
 r.set_initial_value(y0, t0)
 
+h,thrust = controller.evaluate(t[0],a[0],v_0,x_0)
+model.on_control_loop_timestep(h,thrust)
+
 i=0
 while r.successful() and i<n_outerSteps:
   r.integrate(r.t+dt_outer)
   print('time: {}, velocity: {}'.format(r.t,model.v))
   i+=1
-  h = controller.evaluate(r.t,model.a,model.v)
-  model.on_control_loop_timestep(h)
+  h,thrust = controller.evaluate(r.t,model.a,model.v,model.x)
+  model.on_control_loop_timestep(h,thrust)
 
   t[i] = r.t
   x[i] = r.y[0]
@@ -252,7 +351,7 @@ while r.successful() and i<n_outerSteps:
 df_out = pd.DataFrame({
     'time [s]':t,
     'position [m]':x,
-    'velocity [m\s]':v,
+    'velocity [m/s]':v,
     'T_rail_final [C]':T_final,
     'H_y_max':H_y_max,
     'H_y_mean':H_y_mean,
@@ -287,26 +386,26 @@ plt.subplot(714)
 plt.plot(t,H_y_max,label='max')
 plt.plot(t,H_y_mean,label='mean')
 plt.xlabel('time [s]')
-plt.ylabel('H_y [A/m]')
+plt.ylabel('H [A/m]')
 plt.legend(loc='lower left')
 plt.grid()
 
 plt.subplot(715)
 plt.plot(t,T_final)
 plt.xlabel('time [s]')
-plt.ylabel('T_ibeam_surf [C]')
+plt.ylabel('$\Delta$T I-beam\nsurface [C]')
 plt.grid()
 
 plt.subplot(716)
 plt.plot(t,lift_per_assy)
 plt.xlabel('time [s]')
-plt.ylabel('F_lift_per_side [N]')
+plt.ylabel('normal force per\n assembly [N]')
 plt.grid()
 
 plt.subplot(717)
 plt.plot(t,gap)
 plt.xlabel('time [s]')
-plt.ylabel('gap [m]')
+plt.ylabel('magnet to I-beam\ngap [m]')
 plt.grid()
 
 plt.show()
