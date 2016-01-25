@@ -54,7 +54,11 @@ def onpick(event):
     v = v[0]
     h = h[0]
 
-    dff_slice = dff[(dff['v'] == v)&(dff['h'] == h/1000.)]
+    vTol = 0.001
+    hTol = 0.00001
+    vMask = (dff['v'] < (v + vTol)) & (dff['v'] > (v - vTol))
+    hMask = (dff['h'] < (h/1000. + hTol)) & (dff['h'] > (h/1000. - hTol))
+    dff_slice = dff[vMask&hMask]
 
     figi = plt.figure()
     plt.subplot(311)
