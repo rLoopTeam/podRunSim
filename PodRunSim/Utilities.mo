@@ -18,7 +18,7 @@ package Utilities
     function destructor
       input EddyBrakeConnection connection;
       external "C" closeSocketConnection(connection)
-        annotation(Library="eddyBrakeClient",
+        annotation(Library="eddybrakeclient",
           LibraryDirectory="modelica://PodRunSim/ExternalLibraries");
     end destructor;
 
@@ -34,9 +34,8 @@ package Utilities
     output Real H_y_mean;
     output Real q_max;
     output Real q_mean;
-    output Integer status;
-    external "C" status = getEddyBrakeData(con,v,h,f_drag,f_lift,H_y_max,H_y_mean,q_max,q_mean) annotation(
-        Library="eddyBrakeClient",
+    external "C" getEddyBrakeData(con,v,h,f_drag,f_lift,H_y_max,H_y_mean,q_max,q_mean) annotation(
+        Library="eddybrakeclient",
         LibraryDirectory="modelica://PodRunSim/ExternalLibraries");
   end getEddyBrakeData;
 end Utilities;

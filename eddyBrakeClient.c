@@ -23,8 +23,7 @@ void* initSocketConnection(const char* socketName,const char* filename)
     perror("socket");
     exit(1);
   }
-
-  con->address->sun_family = AF_UNIX;
+con->address->sun_family = AF_UNIX;
   strcpy(con->address->sun_path,socketName);
   len = strlen(con->address->sun_path) + sizeof(con->address->sun_family);
   if ( connect(con->id,(struct sockaddr *)con->address,len) == -1 ) {
@@ -65,9 +64,9 @@ void closeSocketConnection(void* object)
 
 int getEddyBrakeData(void* object,
   double v,double h,
-  const double* f_drag,const double* f_lift,
-  const double* H_y_max,const double* H_y_mean,
-  const double* q_max,const double* q_mean)
+  double* f_drag,double* f_lift,
+  double* H_y_max,double* H_y_mean,
+  double* q_max,double* q_mean)
 {
 
   SocketConnection *con = (SocketConnection*) object;
