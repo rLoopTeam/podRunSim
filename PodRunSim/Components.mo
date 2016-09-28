@@ -20,6 +20,6 @@ package Components
   Modelica.Blocks.Interfaces.RealOutput q_mean annotation(Placement(visible = true, transformation(origin = {104, -92}, extent = {{-10, -10}, {10, 10}}, rotation = 0), iconTransformation(origin = {106, -80}, extent = {{-10, -10}, {10, 10}}, rotation = 0)));
   annotation(uses(Modelica(version = "3.2.2")));
   equation
-    getEddyBrakeData(con,v,h,f_drag,f_lift,H_y_max,H_y_mean,q_max,q_mean);
+    (f_drag,f_lift,H_y_max,H_y_mean,q_max,q_mean) = getEddyBrakeData(con,v,h);
   end EddyBrakeData;
 end Components;
