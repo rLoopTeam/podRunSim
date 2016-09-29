@@ -62,7 +62,7 @@ void closeSocketConnection(void* object)
   free(con);
 }
 
-int getEddyBrakeData(void* object,
+void getEddyBrakeData(void* object,
   double v,double h,
   double* f_drag,double* f_lift,
   double* H_y_max,double* H_y_mean,
@@ -80,12 +80,18 @@ int getEddyBrakeData(void* object,
 
   if (send(con->id,input,sizeof(input),0) < 0){
     perror("getEddyBrakeData send");
-    return 1;
+    exit(1);
   }
   if((n=recv(con->id,(void*)output,sizeof(output),0))<=0){
     if(n<0) perror("getEddyBrakeData recv");
     else printf("getEddyBrakeData server closed connection");
-    return 1;
+    exit(1);
   }
-  return 0;
+  *f_drag = output[0];
+  *f_lift = output[1];
+  *H_y_max = output[2];
+  *H_y_mean = output[3];
+  *q_max = output[4];
+  *q_mean = output[5];
+  return;
 }

@@ -1,4 +1,4 @@
 clang -c -fPIC eddyBrakeClient.c
-mkdir -p PodRun/ExternalLibraries
-clang -shared eddyBrakeClient.o -o libeddybrakeClient.c
+mkdir -p PodRunSim/ExternalLibraries
+clang -shared eddyBrakeClient.o -o PodRunSim/ExternalLibraries/libeddybrakeclient.so
 rm eddyBrakeClient.o

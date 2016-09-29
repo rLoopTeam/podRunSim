@@ -14,9 +14,11 @@ s1.listen(0)
 acceptingConnections = True
 
 while acceptingConnections:
+  print("waiting for a connection...")
   s2,s2info = s1.accept()
   filename = s2.recv(2048)
   eddyBrake = EddyBrake(filename)
+  print("connection accepted")
   print('Loaded file: {}'.format(filename))
   s2.sendall("ready")
   ok = True
@@ -34,7 +36,9 @@ while acceptingConnections:
         eddyBrake.q_max(v,h),
         eddyBrake.q_mean(v,h)],dtype="double")
       s2.sendall(outputArr.tostring())
+      print(outputArr)
     except:
+      print("closing connection")
       s2.close()
       ok = False
 
